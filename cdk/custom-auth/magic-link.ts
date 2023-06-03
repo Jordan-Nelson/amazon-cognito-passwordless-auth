@@ -282,7 +282,7 @@ async function createAndSendMagicLink(
       })
     )
     .catch(handleConditionalCheckFailedException(config.notNowMsg));
-  const secretLoginLink = `${redirectUri}#${message.toString(
+  const secretLoginLink = `${redirectUri}/${message.toString(
     "base64url"
   )}.${Buffer.from(signature).toString("base64url")}`;
   logger.debug("Sending magic link ...");
