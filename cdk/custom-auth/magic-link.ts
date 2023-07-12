@@ -41,6 +41,8 @@ import {
   UserFacingError,
   handleConditionalCheckFailedException,
 } from "./common.js";
+import { removeUserFromTable, userExistsInTable } from "./user-table-utils.js";
+import { AdminUpdateUserAttributesCommand, AdminUpdateUserAttributesCommandInput, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 
 let config = {
   /** Should Magic Link sign-in be enabled? If set to false, clients cannot sign-in with magic links (an error is shown instead when they request a magic link) */
@@ -126,11 +128,24 @@ export async function addChallengeToEvent(
     logger.debug(`allowedOrigins: ${allowedOrigins}`)
     throw new UserFacingError(`Invalid redirectUri: ${redirectUri}`);
   }
+
+  let email = event.request.userAttributes.email;
+  let emailVerified = event.request.userAttributes.email_verified;
+  logger.debug(`email ${email}, verified: ${emailVerified}`);
+
+  if (!emailVerified) {
+    let sub = event.request.userAttributes.sub;
+    logger.debug(`Checking user in table with sub: ${sub}`);
+    const allowUnverifiedSignIn = await userExistsInTable(sub);
+    if (!allowUnverifiedSignIn) {
+      throw new UserFacingError(`Email Address is not verified.`);
+    }
+  }
+
   // Send challenge with new secret login code
   await createAndSendMagicLink(event, {
     redirectUri,
   });
-  let email = event.request.userAttributes.email;
   if (event.request.userNotFound) {
     logger.info("User not found");
     const chars = [...event.userName].filter((c) => c.match(/[a-z]/i));
@@ -316,6 +331,7 @@ export async function addChallengeVerificationResultToEvent(
   )
     return;
   event.response.answerCorrect = await verifyMagicLink(
+    event,
     event.request.challengeAnswer,
     event.userName,
     {
@@ -343,6 +359,7 @@ async function downloadPublicKey(kmsKeyId: string) {
 }
 
 async function verifyMagicLink(
+  event: VerifyAuthChallengeResponseTriggerEvent,
   magicLinkFragmentIdentifier: string,
   userName: string,
   context: { userPoolId: string; clientId: string }
@@ -427,6 +444,23 @@ async function verifyMagicLink(
     logger.error("State mismatch");
     return false;
   }
+
+  let email = event.request.userAttributes.email;
+  let emailVerified = event.request.userAttributes.email_verified;
+  logger.debug(`email ${email}, verified: ${emailVerified}`);
+  if (!emailVerified) {
+    let sub = event.request.userAttributes.sub;
+    logger.debug(`Removing user from table with sub: ${sub}`);
+    const allowUnverifiedSignIn = await removeUserFromTable(sub);
+    if (!allowUnverifiedSignIn) {
+      throw new UserFacingError(`Email Address is not verified.`);
+    } else {
+      logger.debug(`Verifying email for: ${event.userName}`);
+      await verifyEmailAddress(event.userPoolId, event.region, event.userName);
+      logger.debug(`Verify email Success.`);
+    }
+  }
+
   return valid;
 }
 
@@ -472,4 +506,19 @@ function maskEmail(emailAddress: string) {
     })
     .join(".");
   return `${start.at(0)}****${start.at(-1)}@${maskedDomain}`;
+}
+
+async function verifyEmailAddress(userPoolId: string, region: string, username: string): Promise<void> {
+  const client = new CognitoIdentityProviderClient({region: region});
+  const params: AdminUpdateUserAttributesCommandInput = {
+    UserPoolId: userPoolId,
+    Username: username,
+    UserAttributes: [{Name: 'email_verified', Value: 'true'}]
+  };
+  await client.send(
+    new AdminUpdateUserAttributesCommand(params)
+  ).catch((error) => {
+    logger.debug(`UpdateUserAttributes failed with error: ${error}`);
+    throw error;
+  });
 }

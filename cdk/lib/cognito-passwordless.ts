@@ -113,10 +113,23 @@ export class Passwordless extends Construct {
   ) {
     super(scope, id);
 
-    var handler;
+    var preInitiateAuthHandler;
+    var usersTable;
 
     if (props.magicLink || props.smsOtpStepUp) {
-      handler = new cdk.aws_lambda_nodejs.NodejsFunction(
+      usersTable = new cdk.aws_dynamodb.Table(
+        scope,
+        `UsersTable${id}`,
+        {
+          billingMode: cdk.aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+          partitionKey: {
+            name: "userSubHash",
+            type: cdk.aws_dynamodb.AttributeType.BINARY,
+          },
+        }
+      );
+
+      preInitiateAuthHandler = new cdk.aws_lambda_nodejs.NodejsFunction(
         this,
         `PreInitiateAuth${id}`,
         {
@@ -129,17 +142,21 @@ export class Passwordless extends Construct {
           ...props.functionProps?.preInitiateAuth,
           environment: {
             LOG_LEVEL: props.logLevel ?? "INFO",
+            DYNAMODB_USERS_TABLE: usersTable.tableName,
+            STACK_ID: cdk.Stack.of(scope).stackId,
             ...props.functionProps?.preInitiateAuth?.environment,
           },
         }
       );
+
+      usersTable.grantReadWriteData(preInitiateAuthHandler);
 
       const api = new apigateway.RestApi(this, "pre-initiate-auth-api", {
         restApiName: "Pre InitiateAuth Service",
         description: "Called prior to passwordless auth flows to check for user existence."
       });
 
-      const preAuthenticationIntegration = new apigateway.LambdaIntegration(handler, {
+      const preAuthenticationIntegration = new apigateway.LambdaIntegration(preInitiateAuthHandler, {
         requestTemplates: { "application/json": '{ "statusCode": "200" }' },
       });
 
@@ -247,6 +264,7 @@ export class Passwordless extends Construct {
             ? this.kmsKey.aliasName
             : this.kmsKey!.keyId,
         DYNAMODB_SECRETS_TABLE: this.secretsTable!.tableName,
+        DYNAMODB_USERS_TABLE: usersTable?.tableName,
         SECONDS_UNTIL_EXPIRY:
           props.magicLink.secondsUntilExpiry?.toSeconds().toString() ?? "900",
         MIN_SECONDS_BETWEEN:
@@ -295,6 +313,7 @@ export class Passwordless extends Construct {
     );
     this.secretsTable?.grantReadWriteData(this.createAuthChallengeFn);
     this.authenticatorsTable?.grantReadData(this.createAuthChallengeFn);
+    usersTable?.grantReadData(this.createAuthChallengeFn);
     if (props.magicLink) {
       this.createAuthChallengeFn.addToRolePolicy(
         new cdk.aws_iam.PolicyStatement({
@@ -364,6 +383,7 @@ export class Passwordless extends Construct {
       Object.assign(verifyAuthChallengeResponseEnvironment, {
         MAGIC_LINK_ENABLED: "TRUE",
         DYNAMODB_SECRETS_TABLE: this.secretsTable!.tableName,
+        DYNAMODB_USERS_TABLE: usersTable?.tableName,
         STACK_ID: cdk.Stack.of(scope).stackId,
       });
     }
@@ -412,6 +432,7 @@ export class Passwordless extends Construct {
     this.authenticatorsTable?.grantReadWriteData(
       this.verifyAuthChallengeResponseFn
     );
+    usersTable?.grantReadWriteData(this.verifyAuthChallengeResponseFn);
     [this.kmsKey, props.magicLink?.rotatedKmsKey]
       .filter(Boolean)
       .forEach((key) => {
@@ -522,10 +543,18 @@ export class Passwordless extends Construct {
         mergedProps
       );
 
-      handler?.role!.attachInlinePolicy(
-        new Policy(this, 'userpool-policy', {
+      preInitiateAuthHandler?.role!.attachInlinePolicy(
+        new Policy(this, 'preInitiateAuthHandler-userpool-policy', {
         statements: [ new PolicyStatement({
           actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
+          resources: [this.userPool.userPoolArn],
+        }) ]
+      }));
+
+      this.verifyAuthChallengeResponseFn.role!.attachInlinePolicy(
+        new Policy(this, 'verifyAuthChallengeResponseFn-userpool-policy', {
+        statements: [ new PolicyStatement({
+          actions: ['cognito-idp:AdminUpdateUserAttributes'],
           resources: [this.userPool.userPoolArn],
         }) ]
       }));

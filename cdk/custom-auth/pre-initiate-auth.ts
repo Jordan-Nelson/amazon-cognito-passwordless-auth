@@ -17,6 +17,7 @@ import { Handler } from "aws-lambda";
 import { logger } from "./common.js";
 import { PreInitiateAuthRequestBody, PreInitiateAuthUser } from "./models.js";
 import { AdminCreateUserCommand, AdminCreateUserCommandInput, AdminGetUserCommand, CognitoIdentityProviderClient, AdminGetUserCommandInput, MessageActionType, UserNotFoundException } from "@aws-sdk/client-cognito-identity-provider";
+import { addUserToTable } from "./user-table-utils.js";
 
 export const handler: Handler = async (event) => {
   logger.info("Pre-initiate-auth ...");
@@ -60,6 +61,18 @@ async function checkUserExists(userPoolId: string, region: string, user: PreInit
     ).then(async (resp) => {
       logger.debug("User Created!");
       logger.debug(JSON.stringify(resp));
+      const user = resp.User;
+      if (!user) {
+        // TODO: is this a state that needs to be handled?
+        throw 'AdminCreateUserCommand was successful but no user was returned.'
+      }
+      const sub = user!.Attributes?.find((attr) => attr.Name == "sub")?.Value;
+      if (!sub) {
+        // TODO: is this a state that needs to be handled?
+        throw 'AdminCreateUserCommand was successful but there is no user sub.'
+      }
+      logger.debug(`Adding user to table with sub: ${sub}`);
+      await addUserToTable(sub);
     })
     .catch((reason) => {
       logger.debug(`Failed to create user: ${reason}`);
