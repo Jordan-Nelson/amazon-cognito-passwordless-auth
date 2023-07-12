@@ -52,7 +52,7 @@ let config = {
   /** The origins that are allowed to be used in the Magic Links */
   allowedOrigins: process.env.ALLOWED_ORIGINS?.split(",")
     .map((href) => new URL(href))
-    .map((url) => url.href),
+    .map((url) => url.origin),
   /** The e-mail address that Magic Links will be sent from */
   sesFromAddress: process.env.SES_FROM_ADDRESS,
   /** The Amazon SES region */
@@ -117,10 +117,13 @@ export async function addChallengeToEvent(
   logger.info("Client needs sign-in link");
   // Determine the redirect URI for the magic link
   const redirectUri = event.request.clientMetadata?.redirectUri;
-  if (
-    !redirectUri ||
-    !requireConfig("allowedOrigins").includes(new URL(redirectUri).href)
-  ) {
+  if (!redirectUri) {
+    throw new UserFacingError(`No redirect URI provided`);
+  }
+  const origin = new URL(redirectUri).origin
+  const allowedOrigins = requireConfig("allowedOrigins");
+  if (!allowedOrigins.includes(origin) ) {
+    logger.debug(`allowedOrigins: ${allowedOrigins}`)
     throw new UserFacingError(`Invalid redirectUri: ${redirectUri}`);
   }
   // Send challenge with new secret login code
@@ -282,9 +285,8 @@ async function createAndSendMagicLink(
       })
     )
     .catch(handleConditionalCheckFailedException(config.notNowMsg));
-  const secretLoginLink = `${redirectUri}#${message.toString(
-    "base64url"
-  )}.${Buffer.from(signature).toString("base64url")}`;
+  const linkFragment = `${message.toString("base64url")}.${Buffer.from(signature).toString("base64url")}`;
+  const secretLoginLink = redirectUri.replace('##code##', linkFragment);
   logger.debug("Sending magic link ...");
   if (event.request.userNotFound) {
     return;
