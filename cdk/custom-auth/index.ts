@@ -20,6 +20,7 @@ export { handler as defineAuthChallengeHandler } from "./define-auth-challenge.j
 export { handler as verifyAuthChallengeResponseHandler } from "./verify-auth-challenge-response.js";
 export { handler as preTokenHandler } from "./pre-token.js";
 export { handler as preSignUpHandler } from "./pre-signup.js";
+export { handler as preInitiateAuthHandler } from "./pre-initiate-auth.js";
 export * as fido2credentialsApi from "./fido2-credentials-api.js";
 export {
   logger,

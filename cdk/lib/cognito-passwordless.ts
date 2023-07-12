@@ -13,11 +13,13 @@
  * language governing permissions and limitations under the License.
  */
 import * as cdk from "aws-cdk-lib";
+import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as apigw from "@aws-cdk/aws-apigatewayv2-alpha";
 import * as apigwInt from "@aws-cdk/aws-apigatewayv2-integrations-alpha";
 import * as apigwAuth from "@aws-cdk/aws-apigatewayv2-authorizers-alpha";
 import { Construct } from "constructs";
 import { join } from "path";
+import { Policy, PolicyStatement } from "aws-cdk-lib/aws-iam";
 
 type TableProps = Omit<cdk.aws_dynamodb.TableProps, "partitionKey" | "sortKey">;
 
@@ -94,6 +96,7 @@ export class Passwordless extends Construct {
         defineAuthChallenge?: Partial<cdk.aws_lambda_nodejs.NodejsFunctionProps>;
         verifyAuthChallengeResponse?: Partial<cdk.aws_lambda_nodejs.NodejsFunctionProps>;
         preSignUp?: Partial<cdk.aws_lambda_nodejs.NodejsFunctionProps>;
+        preInitiateAuth?: Partial<cdk.aws_lambda_nodejs.NodejsFunctionProps>;
         preTokenGeneration?: Partial<cdk.aws_lambda_nodejs.NodejsFunctionProps>;
         fido2?: Partial<cdk.aws_lambda_nodejs.NodejsFunctionProps>;
       };
@@ -109,6 +112,40 @@ export class Passwordless extends Construct {
     }
   ) {
     super(scope, id);
+
+    var handler;
+
+    if (props.magicLink || props.smsOtpStepUp) {
+      handler = new cdk.aws_lambda_nodejs.NodejsFunction(
+        this,
+        `PreInitiateAuth${id}`,
+        {
+          entry: join(__dirname, "..", "custom-auth", "pre-initiate-auth.js"),
+          runtime: cdk.aws_lambda.Runtime.NODEJS_18_X,
+          architecture: cdk.aws_lambda.Architecture.ARM_64,
+          bundling: {
+            format: cdk.aws_lambda_nodejs.OutputFormat.ESM,
+          },
+          ...props.functionProps?.preInitiateAuth,
+          environment: {
+            LOG_LEVEL: props.logLevel ?? "INFO",
+            ...props.functionProps?.preInitiateAuth?.environment,
+          },
+        }
+      );
+
+      const api = new apigateway.RestApi(this, "pre-initiate-auth-api", {
+        restApiName: "Pre InitiateAuth Service",
+        description: "Called prior to passwordless auth flows to check for user existence."
+      });
+
+      const preAuthenticationIntegration = new apigateway.LambdaIntegration(handler, {
+        requestTemplates: { "application/json": '{ "statusCode": "200" }' },
+      });
+
+      api.root.addMethod("POST", preAuthenticationIntegration);
+
+    }
 
     if (props.magicLink) {
       if (props.magicLink.kmsKey) {
@@ -484,6 +521,15 @@ export class Passwordless extends Construct {
         `UserPool${id}`,
         mergedProps
       );
+
+      handler?.role!.attachInlinePolicy(
+        new Policy(this, 'userpool-policy', {
+        statements: [ new PolicyStatement({
+          actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
+          resources: [this.userPool.userPoolArn],
+        }) ]
+      }));
+
     } else {
       props.userPool.addTrigger(
         cdk.aws_cognito.UserPoolOperation.CREATE_AUTH_CHALLENGE,
