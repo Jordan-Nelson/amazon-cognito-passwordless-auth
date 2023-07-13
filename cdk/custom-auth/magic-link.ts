@@ -133,7 +133,7 @@ export async function addChallengeToEvent(
   let emailVerified = event.request.userAttributes.email_verified;
   logger.debug(`email ${email}, verified: ${emailVerified}`);
 
-  if (!emailVerified) {
+  if (emailVerified != "true") {
     let sub = event.request.userAttributes.sub;
     logger.debug(`Checking user in table with sub: ${sub}`);
     const allowUnverifiedSignIn = await userExistsInTable(sub);
@@ -448,7 +448,7 @@ async function verifyMagicLink(
   let email = event.request.userAttributes.email;
   let emailVerified = event.request.userAttributes.email_verified;
   logger.debug(`email ${email}, verified: ${emailVerified}`);
-  if (!emailVerified) {
+  if (emailVerified != "true") {
     let sub = event.request.userAttributes.sub;
     logger.debug(`Removing user from table with sub: ${sub}`);
     const allowUnverifiedSignIn = await removeUserFromTable(sub);
